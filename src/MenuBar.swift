@@ -60,6 +60,9 @@ func readMem() -> Mem {
     return m
 }
 
+// iOS Simulator processes respawn if just killed (CoreSimulator restarts them), so they are shut down via simctl.
+let simGroup = "iOS Simulator"
+
 func topGroups() -> [Grp] {
     let skip: Set<String> = ["WindowServer", "loginwindow", "Finder", "Dock", "SystemUIServer", "launchd", "kernel_task", "MacBar", "ps", "bash"]
     var g: [String: Grp] = [:]
@@ -68,7 +71,9 @@ func topGroups() -> [Grp] {
         guard parts.count == 3, let pid = Int32(parts[0]), let rss = Double(parts[1]) else { continue }
         let cmd = String(parts[2])
         var name: String
-        if let r = cmd.range(of: ".app/") {
+        if cmd.contains(".simruntime/") || cmd.contains("CoreSimulator/Devices/") {
+            name = simGroup
+        } else if let r = cmd.range(of: ".app/") {
             name = String(cmd[..<r.lowerBound]).components(separatedBy: "/").last ?? cmd
         } else {
             name = (cmd.split(separator: " ").first.map(String.init) ?? cmd).components(separatedBy: "/").last ?? cmd
@@ -233,6 +238,7 @@ final class App: NSObject, NSApplicationDelegate {
             i.submenu = sub
             m.addItem(i)
         }
+        m.addItem(item("Select apps to quit…") { [weak self] in self?.selectAndQuit() })
         m.addItem(.separator())
         m.addItem(item("Purge inactive memory (asks password)") { [weak self] in self?.purge() })
 
@@ -437,6 +443,18 @@ final class App: NSObject, NSApplicationDelegate {
     func quitGroup(_ g: Grp, force: Bool) {
         guard confirm("\(force ? "Force quit" : "Quit") \(g.name)?",
                       "\(g.pids.count) process(es), \(fmtMB(g.mb)). Unsaved work in it will be lost.", "Quit") else { return }
+        terminate(g, force: force)
+        refreshAfterQuit()
+    }
+
+    func terminate(_ g: Grp, force: Bool) {
+        if g.name == simGroup {
+            DispatchQueue.global().async {
+                sh("xcrun simctl shutdown all; killall Simulator 2>/dev/null")
+                if force { sh("killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null") }
+            }
+            return
+        }
         for pid in g.pids {
             if !force, let a = NSRunningApplication(processIdentifier: pid), a.activationPolicy == .regular {
                 a.terminate()
@@ -444,7 +462,45 @@ final class App: NSObject, NSApplicationDelegate {
                 kill(pid, force ? SIGKILL : SIGTERM)
             }
         }
+    }
+
+    // Apps take a moment to exit and the kernel frees pages lazily, so refresh twice.
+    func refreshAfterQuit() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.tick(forceSessions: true) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.tick() }
+    }
+
+    /// Checkbox list of the top memory apps; quit or force quit all ticked ones in one go.
+    func selectAndQuit() {
+        let list = Array(groups.prefix(15))
+        guard !list.isEmpty else { return }
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        var boxes: [NSButton] = []
+        for g in list {
+            let b = NSButton(checkboxWithTitle: "\(g.name) — \(fmtMB(g.mb))", target: nil, action: nil)
+            b.state = .off
+            stack.addArrangedSubview(b)
+            boxes.append(b)
+        }
+        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
+
+        let a = NSAlert()
+        a.messageText = "Select apps to quit"
+        a.informativeText = "Tick the apps to close. Unsaved work in them will be lost."
+        a.accessoryView = stack
+        a.addButton(withTitle: "Quit selected")
+        a.addButton(withTitle: "Force quit selected")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        let r = a.runModal()
+        guard r == .alertFirstButtonReturn || r == .alertSecondButtonReturn else { return }
+        let picked = zip(list, boxes).filter { $0.1.state == .on }.map { $0.0 }
+        guard !picked.isEmpty else { return }
+        for g in picked { terminate(g, force: r == .alertSecondButtonReturn) }
+        refreshAfterQuit()
     }
 
     func purge() {
