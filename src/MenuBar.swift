@@ -112,6 +112,8 @@ final class App: NSObject, NSApplicationDelegate {
     var awakeOn = false
     var awakeUntil: Date? = nil
     var awakeTimer: Timer?
+    var awakeName: String? = nil
+    var awakeLid = false
     var lidOn = false
     var keepScreen: Bool = {
         let d = UserDefaults.standard
@@ -190,6 +192,9 @@ final class App: NSObject, NSApplicationDelegate {
         return i
     }
 
+    // explicit tick in the title, so the active choice is visible on every macOS version
+    func mark(_ on: Bool, _ t: String) -> String { (on ? "✓  " : "      ") + t }
+
     func label(_ title: String) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         i.isEnabled = false
@@ -237,21 +242,19 @@ final class App: NSObject, NSApplicationDelegate {
         m.addItem(label(awakeStatus()))
         let lo = NSMenu()
         for (name, secs) in durations {
-            lo.addItem(item(name) { [weak self] in self?.startAwake(name, secs, lid: false) })
+            lo.addItem(item(mark(awakeOn && !awakeLid && awakeName == name, name)) { [weak self] in self?.startAwake(name, secs, lid: false) })
         }
         let loi = NSMenuItem(title: "Keep awake (lid open)", action: nil, keyEquivalent: "")
         loi.submenu = lo
         m.addItem(loi)
         let lc = NSMenu()
         for (name, secs) in durations {
-            lc.addItem(item(name) { [weak self] in self?.startAwake(name, secs, lid: true) })
+            lc.addItem(item(mark(awakeOn && awakeLid && awakeName == name, name)) { [weak self] in self?.startAwake(name, secs, lid: true) })
         }
         let lci = NSMenuItem(title: "Keep awake, lid closed (asks password)", action: nil, keyEquivalent: "")
         lci.submenu = lc
         m.addItem(lci)
-        let ks = item("Keep screen on") { [weak self] in self?.setKeepScreen(!(self?.keepScreen ?? true)) }
-        ks.state = keepScreen ? .on : .off
-        m.addItem(ks)
+        m.addItem(item(mark(keepScreen, "Keep screen on")) { [weak self] in self?.setKeepScreen(!(self?.keepScreen ?? true)) })
         if awakeOn || lidOn { m.addItem(item("Turn off keep awake") { [weak self] in self?.stopAwake() }) }
 
         // Sessions
@@ -270,13 +273,11 @@ final class App: NSObject, NSApplicationDelegate {
         }
         let fm = NSMenu()
         for (name, h) in choices {
-            let i = item(name) { [weak self] in
+            fm.addItem(item(mark(h == hours, name)) { [weak self] in
                 self?.hours = h
                 UserDefaults.standard.set(h, forKey: "hours")
                 self?.tick(forceSessions: true)
-            }
-            i.state = (h == hours) ? .on : .off
-            fm.addItem(i)
+            })
         }
         let fi = NSMenuItem(title: "Session filter: \(filterName)", action: nil, keyEquivalent: "")
         fi.submenu = fm
@@ -292,9 +293,7 @@ final class App: NSObject, NSApplicationDelegate {
         }
 
         m.addItem(.separator())
-        let li = item("Launch at login") { [weak self] in self?.setLogin(!(self?.loginOn ?? false)) }
-        li.state = loginOn ? .on : .off
-        m.addItem(li)
+        m.addItem(item(mark(loginOn, "Launch at login")) { [weak self] in self?.setLogin(!(self?.loginOn ?? false)) })
         m.addItem(item("Refresh") { [weak self] in self?.tick(forceSessions: true) })
         m.addItem(item("Quit MacBar") { [weak self] in self?.quitApp() })
         bar.menu = m
@@ -362,6 +361,8 @@ final class App: NSObject, NSApplicationDelegate {
         releaseAssertions()
         createAssertions()
         awakeOn = true
+        awakeName = name
+        awakeLid = lid
         awakeUntil = secs.map { Date().addingTimeInterval($0) }
         awakeTimer?.invalidate()
         if let s = secs {
@@ -375,6 +376,8 @@ final class App: NSObject, NSApplicationDelegate {
         awakeTimer = nil
         releaseAssertions()
         awakeOn = false
+        awakeName = nil
+        awakeLid = false
         awakeUntil = nil
         if revertLid && lidOn { admin("pmset -a disablesleep 0; rm -f /private/tmp/macbar-lid") }
         tick()
