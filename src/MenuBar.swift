@@ -251,7 +251,7 @@ final class App: NSObject, NSApplicationDelegate {
         for (name, secs) in durations {
             lc.addItem(item(mark(awakeOn && awakeLid && awakeName == name, name)) { [weak self] in self?.startAwake(name, secs, lid: true) })
         }
-        let lci = NSMenuItem(title: "Keep awake, lid closed (asks password)", action: nil, keyEquivalent: "")
+        let lci = NSMenuItem(title: "Keep awake, lid closed (Touch ID / password)", action: nil, keyEquivalent: "")
         lci.submenu = lc
         m.addItem(lci)
         m.addItem(item(mark(keepScreen, "Keep screen on")) { [weak self] in self?.setKeepScreen(!(self?.keepScreen ?? true)) })
@@ -314,8 +314,28 @@ final class App: NSObject, NSApplicationDelegate {
         return s
     }
 
+    // Touch ID for sudo is on when /etc/pam.d/sudo_local has an uncommented pam_tid.so line.
+    var touchIDSudo: Bool {
+        guard let t = try? String(contentsOfFile: "/etc/pam.d/sudo_local", encoding: .utf8) else { return false }
+        return t.split(separator: "\n").contains { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") && $0.contains("pam_tid.so") }
+    }
+
+    func runSudo(_ cmd: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        p.arguments = ["/bin/sh", "-c", cmd]
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        return p.terminationStatus == 0
+    }
+
+    /// Run a command as root. Touch ID via sudo if enabled, otherwise the admin password dialog.
     @discardableResult
     func admin(_ cmd: String) -> Bool {
+        if touchIDSudo && runSudo(cmd) { return true }
         let esc = cmd.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         var err: NSDictionary?
         NSAppleScript(source: "do shell script \"\(esc)\" with administrator privileges")?.executeAndReturnError(&err)
@@ -349,7 +369,7 @@ final class App: NSObject, NSApplicationDelegate {
                 ? "It stays on until you turn it off."
                 : "It switches itself off after \(name.lowercased())."
             guard confirm("Keep awake with the lid closed?",
-                          warn + " Do not put the Mac in a bag while it is on: it can overheat and drain the battery.\n\nNeeds your admin password.",
+                          warn + " Do not put the Mac in a bag while it is on: it can overheat and drain the battery.\n\nNeeds Touch ID or your admin password.",
                           "Enable") else { return }
             let token = UUID().uuidString
             var cmd = "pmset -a disablesleep 1; echo \(token) > /private/tmp/macbar-lid"
