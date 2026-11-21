@@ -73,7 +73,12 @@ END {
       owner = ""
       for (a = ppid[q]; a > 1 && a != ""; a = ppid[a])
         if (is_claude(c[a])) { owner = a; break }
-      if (owner == "" || (owner in stale)) kind = "mcp-orphan"
+      # no Claude owner: orphan only if the top of its chain is itself an MCP/npm
+      # wrapper. If the top is an app (Antigravity, Claude Desktop, Cursor...), it is live.
+      r = q
+      while (ppid[r] > 1 && (ppid[r] in c)) r = ppid[r]
+      wrapper = (c[r] ~ mcp_re || c[r] ~ /npm exec|npx /)
+      if ((owner == "" && wrapper) || (owner in stale)) kind = "mcp-orphan"
     }
     else if (dev && c[q] ~ dev_re) kind = "dev-server"
     if (kind != "") printf "%s\t%s\t%d\t%d\t%s\n", q, kind, age[q], rss[q]/1024, substr(c[q], 1, 90)
