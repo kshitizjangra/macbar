@@ -15,9 +15,11 @@ No network code. No telemetry. Everything runs locally.
 
 ## Download
 
-Grab `MacBar.zip` from the Releases page, unzip, and drag `MacBar.app` to Applications.
-Apple Silicon, macOS 13+. The app is ad-hoc signed, so the first time: right-click the app, then **Open**.
+1. Download `MacBar.dmg` from the Releases page and open it.
+2. Drag **MacBar** onto the **Applications** folder in the window.
+3. Open MacBar from Applications (or Spotlight). The first time, right-click it and choose **Open**, because the app is ad-hoc signed.
 
+Apple Silicon, macOS 13+. `MacBar.zip` has the same app if you prefer a zip.
 It launches at login by default after the first run. Turn it off from the menu (**Launch at login**).
 
 ## Build from source
@@ -28,7 +30,7 @@ Needs Xcode Command Line Tools (`xcode-select --install`).
 ./build.sh
 ```
 
-`./release.sh` also writes `dist/MacBar.zip`.
+`./release.sh` also writes `dist/MacBar.dmg` and `dist/MacBar.zip`. `tools/make-icon.sh` redraws the app icon.
 
 Builds `~/Applications/MacBar.app`, launches it, and installs the CLI to `~/.local/bin/mcpclean`.
 
