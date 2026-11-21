@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 // MARK: helpers
 
@@ -104,7 +105,29 @@ final class App: NSObject, NSApplicationDelegate {
     var tickN = 0
     var acts: [Act] = []
 
+    var loginOn: Bool {
+        if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
+        return false
+    }
+
+    func setLogin(_ on: Bool) {
+        if #available(macOS 13.0, *) {
+            do {
+                if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            } catch {
+                _ = confirm("Could not change launch at login", error.localizedDescription, "OK")
+            }
+        }
+        render()
+    }
+
     func applicationDidFinishLaunching(_ n: Notification) {
+        // First run: turn launch-at-login on once. Menu toggle turns it off.
+        let d = UserDefaults.standard
+        if !d.bool(forKey: "loginInit") {
+            d.set(true, forKey: "loginInit")
+            if #available(macOS 13.0, *) { try? SMAppService.mainApp.register() }
+        }
         bar.button?.title = "🧹"
         tick()
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.tick() }
@@ -227,6 +250,9 @@ final class App: NSObject, NSApplicationDelegate {
         }
 
         m.addItem(.separator())
+        let li = item("Launch at login") { [weak self] in self?.setLogin(!(self?.loginOn ?? false)) }
+        li.state = loginOn ? .on : .off
+        m.addItem(li)
         m.addItem(item("Refresh") { [weak self] in self?.tick(forceSessions: true) })
         m.addItem(item("Quit MacBar") { NSApp.terminate(nil) })
         bar.menu = m

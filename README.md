@@ -8,13 +8,22 @@ Tiny macOS menu-bar app for a laggy dev Mac. One icon, three jobs:
 
 No network code. No telemetry. Everything runs locally.
 
-## Install
+## Download
+
+Grab `MacBar.zip` from the Releases page, unzip, and drag `MacBar.app` to Applications.
+Apple Silicon, macOS 13+. The app is ad-hoc signed, so the first time: right-click the app, then **Open**.
+
+It launches at login by default after the first run. Turn it off from the menu (**Launch at login**).
+
+## Build from source
 
 Needs Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
 ./build.sh
 ```
+
+`./release.sh` also writes `dist/MacBar.zip`.
 
 Builds `~/Applications/MacBar.app`, launches it, and installs the CLI to `~/.local/bin/mcpclean`.
 
