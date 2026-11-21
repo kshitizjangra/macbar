@@ -4,7 +4,10 @@ Tiny macOS menu-bar app for a laggy dev Mac. One icon, three jobs:
 
 - **Memory**: RAM, swap and free disk at a glance. Top memory apps, click to quit or force quit. Optional `purge`.
 - **Claude sessions & MCP**: finds stale Claude sessions and orphaned MCP servers (argent, rea, chrome-devtools, openmotion, selenium, playwright, ...). Filter by age (all running, 1h, 3h, 6h, 12h, 24h) and stop them in one click. Optional dev servers (expo, vitest, vite).
+- **Keep awake**: like Caffeine and Amphetamine in one. Keep the Mac awake for 15 min to 8 h, or indefinitely. Optional "keep screen on". A **lid closed** mode keeps it running with the lid shut (uses `pmset disablesleep`, asks for your admin password, reverts by itself when the timer ends).
 - **Disk**: clears Xcode DerivedData, the npm cache and old Homebrew downloads.
+
+Lid-closed mode: do not carry the Mac in a bag while it is on, it can overheat. If you quit MacBar with it on, you are asked whether to turn it off. Manual off: `sudo pmset -a disablesleep 0`.
 
 No network code. No telemetry. Everything runs locally.
 

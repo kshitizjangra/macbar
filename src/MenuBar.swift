@@ -1,5 +1,6 @@
 import Cocoa
 import ServiceManagement
+import IOKit.pwr_mgt
 
 // MARK: helpers
 
@@ -105,6 +106,20 @@ final class App: NSObject, NSApplicationDelegate {
     var tickN = 0
     var acts: [Act] = []
 
+    // keep awake
+    var sysID: IOPMAssertionID = 0
+    var dispID: IOPMAssertionID = 0
+    var awakeOn = false
+    var awakeUntil: Date? = nil
+    var awakeTimer: Timer?
+    var lidOn = false
+    var keepScreen: Bool = {
+        let d = UserDefaults.standard
+        return d.object(forKey: "keepScreen") == nil ? true : d.bool(forKey: "keepScreen")
+    }()
+    let durations: [(String, Double?)] = [("Indefinitely", nil), ("15 minutes", 900), ("30 minutes", 1800), ("1 hour", 3600),
+                                          ("2 hours", 7200), ("4 hours", 14400), ("8 hours", 28800)]
+
     var loginOn: Bool {
         if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
         return false
@@ -142,6 +157,7 @@ final class App: NSObject, NSApplicationDelegate {
         DispatchQueue.global().async {
             let m = readMem()
             let g = topGroups()
+            let lid = sh("pmset -g | grep -i SleepDisabled").contains("1")
             var newRows: [String]? = nil
             var sum = ""
             var cache: Double? = nil
@@ -155,6 +171,8 @@ final class App: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 self.mem = m
                 self.groups = g
+                self.lidOn = lid
+                if self.awakeOn, let u = self.awakeUntil, Date() >= u { self.stopAwake(revertLid: false) }
                 if let r = newRows { self.rows = r; self.summary = sum }
                 if let c = cache { self.cacheMB = c }
                 self.render()
@@ -189,6 +207,7 @@ final class App: NSObject, NSApplicationDelegate {
         let pct = mem.total > 0 ? Int(mem.used / mem.total * 100) : 0
         var t = "🧹 \(pct)%"
         if !rows.isEmpty { t += " · \(rows.count)" }
+        if awakeOn || lidOn { t += lidOn ? " ☕⚠" : " ☕" }
         bar.button?.title = t
 
         let m = NSMenu()
@@ -211,6 +230,29 @@ final class App: NSObject, NSApplicationDelegate {
         }
         m.addItem(.separator())
         m.addItem(item("Purge inactive memory (asks password)") { [weak self] in self?.purge() })
+
+        // Keep awake
+        m.addItem(.separator())
+        m.addItem(header("KEEP AWAKE"))
+        m.addItem(label(awakeStatus()))
+        let lo = NSMenu()
+        for (name, secs) in durations {
+            lo.addItem(item(name) { [weak self] in self?.startAwake(name, secs, lid: false) })
+        }
+        let loi = NSMenuItem(title: "Keep awake (lid open)", action: nil, keyEquivalent: "")
+        loi.submenu = lo
+        m.addItem(loi)
+        let lc = NSMenu()
+        for (name, secs) in durations {
+            lc.addItem(item(name) { [weak self] in self?.startAwake(name, secs, lid: true) })
+        }
+        let lci = NSMenuItem(title: "Keep awake, lid closed (asks password)", action: nil, keyEquivalent: "")
+        lci.submenu = lc
+        m.addItem(lci)
+        let ks = item("Keep screen on") { [weak self] in self?.setKeepScreen(!(self?.keepScreen ?? true)) }
+        ks.state = keepScreen ? .on : .off
+        m.addItem(ks)
+        if awakeOn || lidOn { m.addItem(item("Turn off keep awake") { [weak self] in self?.stopAwake() }) }
 
         // Sessions
         m.addItem(.separator())
@@ -254,8 +296,107 @@ final class App: NSObject, NSApplicationDelegate {
         li.state = loginOn ? .on : .off
         m.addItem(li)
         m.addItem(item("Refresh") { [weak self] in self?.tick(forceSessions: true) })
-        m.addItem(item("Quit MacBar") { NSApp.terminate(nil) })
+        m.addItem(item("Quit MacBar") { [weak self] in self?.quitApp() })
         bar.menu = m
+    }
+
+    // MARK: keep awake
+
+    func awakeStatus() -> String {
+        guard awakeOn || lidOn else { return "Keep awake: off" }
+        var s = "Keep awake: on"
+        if let u = awakeUntil {
+            let r = max(0, Int(u.timeIntervalSinceNow))
+            s += " · \(r / 3600)h \(r % 3600 / 60)m left"
+        } else if awakeOn {
+            s += " · until turned off"
+        }
+        if lidOn { s += " · lid closed OK" }
+        return s
+    }
+
+    @discardableResult
+    func admin(_ cmd: String) -> Bool {
+        let esc = cmd.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        var err: NSDictionary?
+        NSAppleScript(source: "do shell script \"\(esc)\" with administrator privileges")?.executeAndReturnError(&err)
+        return err == nil
+    }
+
+    func createAssertions() {
+        IOPMAssertionCreateWithName(kIOPMAssertPreventUserIdleSystemSleep as CFString,
+                                    IOPMAssertionLevel(kIOPMAssertionLevelOn), "MacBar keep awake" as CFString, &sysID)
+        if keepScreen {
+            IOPMAssertionCreateWithName(kIOPMAssertPreventUserIdleDisplaySleep as CFString,
+                                        IOPMAssertionLevel(kIOPMAssertionLevelOn), "MacBar keep screen on" as CFString, &dispID)
+        }
+    }
+
+    func releaseAssertions() {
+        if sysID != 0 { IOPMAssertionRelease(sysID); sysID = 0 }
+        if dispID != 0 { IOPMAssertionRelease(dispID); dispID = 0 }
+    }
+
+    func setKeepScreen(_ on: Bool) {
+        keepScreen = on
+        UserDefaults.standard.set(on, forKey: "keepScreen")
+        if awakeOn { releaseAssertions(); createAssertions() }
+        render()
+    }
+
+    func startAwake(_ name: String, _ secs: Double?, lid: Bool) {
+        if lid {
+            let warn = secs == nil
+                ? "It stays on until you turn it off."
+                : "It switches itself off after \(name.lowercased())."
+            guard confirm("Keep awake with the lid closed?",
+                          warn + " Do not put the Mac in a bag while it is on: it can overheat and drain the battery.\n\nNeeds your admin password.",
+                          "Enable") else { return }
+            let token = UUID().uuidString
+            var cmd = "pmset -a disablesleep 1; echo \(token) > /private/tmp/macbar-lid"
+            if let s = secs {
+                cmd += "; nohup sh -c 'sleep \(Int(s)); if [ \"$(cat /private/tmp/macbar-lid 2>/dev/null)\" = \"\(token)\" ]; then pmset -a disablesleep 0; rm -f /private/tmp/macbar-lid; fi' >/dev/null 2>&1 &"
+            }
+            guard admin(cmd) else { return }
+        }
+        releaseAssertions()
+        createAssertions()
+        awakeOn = true
+        awakeUntil = secs.map { Date().addingTimeInterval($0) }
+        awakeTimer?.invalidate()
+        if let s = secs {
+            awakeTimer = Timer.scheduledTimer(withTimeInterval: s, repeats: false) { [weak self] _ in self?.stopAwake(revertLid: false) }
+        }
+        tick()
+    }
+
+    func stopAwake(revertLid: Bool = true) {
+        awakeTimer?.invalidate()
+        awakeTimer = nil
+        releaseAssertions()
+        awakeOn = false
+        awakeUntil = nil
+        if revertLid && lidOn { admin("pmset -a disablesleep 0; rm -f /private/tmp/macbar-lid") }
+        tick()
+    }
+
+    func quitApp() {
+        guard lidOn else { NSApp.terminate(nil); return }
+        let a = NSAlert()
+        a.messageText = "Lid-closed mode is still on"
+        a.informativeText = "Turn it off before quitting? (needs your admin password)"
+        a.addButton(withTitle: "Turn off & quit")
+        a.addButton(withTitle: "Quit, leave on")
+        a.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            if admin("pmset -a disablesleep 0; rm -f /private/tmp/macbar-lid") { NSApp.terminate(nil) }
+        case .alertSecondButtonReturn:
+            NSApp.terminate(nil)
+        default:
+            break
+        }
     }
 
     // MARK: actions
