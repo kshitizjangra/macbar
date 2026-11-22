@@ -290,6 +290,7 @@ final class App: NSObject, NSApplicationDelegate {
         m.addItem(fi)
         m.addItem(item("Clean now") { [weak self] in self?.cleanSessions(dev: false) })
         m.addItem(item("Clean now + dev servers") { [weak self] in self?.cleanSessions(dev: true) })
+        m.addItem(item("Clean now + Terminal tab jobs…") { [weak self] in self?.cleanSessions(dev: true, terminal: true) })
 
         // Disk
         if cacheMB > 50 {
@@ -511,13 +512,15 @@ final class App: NSObject, NSApplicationDelegate {
         }
     }
 
-    func cleanSessions(dev: Bool) {
-        if hours == 0 && !confirm("Stop ALL running Claude sessions?",
+    func cleanSessions(dev: Bool, terminal: Bool = false) {
+        if terminal && !confirm("Stop Terminal tab jobs?",
+                                "Stops everything running inside Terminal/iTerm tabs (older than the filter), plus Claude sessions, MCP servers and dev servers. The tabs themselves stay open.", "Stop") { return }
+        if hours == 0 && !terminal && !confirm("Stop ALL running Claude sessions?",
                                   "Includes any session you are using right now, plus their MCP servers.", "Stop all") { return }
         bar.button?.title = "🧹 …"
         let h = hours
         DispatchQueue.global().async {
-            sh("bash '\(self.script)' --kill" + (dev ? " --dev" : ""), ["MAX_AGE_H": String(h)])
+            sh("bash '\(self.script)' --kill" + (dev ? " --dev" : "") + (terminal ? " --terminal" : ""), ["MAX_AGE_H": String(h)])
             DispatchQueue.main.async { self.tick(forceSessions: true) }
         }
     }
